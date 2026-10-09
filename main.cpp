@@ -280,6 +280,20 @@ void PlayStateSound() {
 	PlaySoundW(gMuted ? kSoundOff : kSoundOn, nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
 }
 
+DWORD LoadSetting(const wchar_t* name, DWORD defaultValue) {
+	DWORD value = 0;
+	DWORD size = sizeof(value);
+	LSTATUS status = RegGetValueW(HKEY_CURRENT_USER, kSettingsKey, name, RRF_RT_REG_DWORD, nullptr, &value, &size);
+	return status == ERROR_SUCCESS ? value : defaultValue;
+}
+
+void SaveSetting(const wchar_t* name, DWORD value) {
+	HKEY key;
+	if (RegCreateKeyExW(HKEY_CURRENT_USER, kSettingsKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) return;
+	RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value));
+	RegCloseKey(key);
+}
+
 void ToggleMic() {
 	gMuted = !IsDefaultMicMuted();
 	SetAllMicsMuted(gMuted);
@@ -312,20 +326,6 @@ void FormatHotkey(WORD hotkey, wchar_t* label) {
 	wchar_t keyName[32];
 	if (GetKeyNameTextW(keyInfo, keyName, 32) == 0) wsprintfW(keyName, L"0x%02X", key);
 	lstrcatW(label, keyName);
-}
-
-DWORD LoadSetting(const wchar_t* name, DWORD defaultValue) {
-	DWORD value = 0;
-	DWORD size = sizeof(value);
-	LSTATUS status = RegGetValueW(HKEY_CURRENT_USER, kSettingsKey, name, RRF_RT_REG_DWORD, nullptr, &value, &size);
-	return status == ERROR_SUCCESS ? value : defaultValue;
-}
-
-void SaveSetting(const wchar_t* name, DWORD value) {
-	HKEY key;
-	if (RegCreateKeyExW(HKEY_CURRENT_USER, kSettingsKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) return;
-	RegSetValueExW(key, name, 0, REG_DWORD, reinterpret_cast<const BYTE*>(&value), sizeof(value));
-	RegCloseKey(key);
 }
 
 WORD LoadHotkey() {
