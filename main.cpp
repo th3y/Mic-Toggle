@@ -283,6 +283,7 @@ void PlayStateSound() {
 void ToggleMic() {
 	gMuted = !IsDefaultMicMuted();
 	SetAllMicsMuted(gMuted);
+	SaveSetting(L"Muted", gMuted);
 	UpdateTrayIcon(NIM_MODIFY);
 	if (gSoundEnabled) PlayStateSound();
 	if (gNotificationsEnabled) ShowStateNotification();
@@ -501,6 +502,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 	case WM_MUTE_CHANGED:
 		if (gMuted != (wParam != 0)) {
 			gMuted = wParam != 0;
+			SaveSetting(L"Muted", gMuted);
 			UpdateTrayIcon(NIM_MODIFY);
 		}
 		return 0;
@@ -559,7 +561,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
 	gWindow = CreateWindowW(kAppName, kAppName, 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, nullptr);
 	gTaskbarCreatedMsg = RegisterWindowMessageW(L"TaskbarCreated");
-	gMuted = IsDefaultMicMuted();
+	gMuted = LoadSetting(L"Muted", IsDefaultMicMuted()) != 0;
+	SetAllMicsMuted(gMuted);
 	UseHotkey(LoadHotkey());
 	gNotificationsEnabled = LoadSetting(L"Notifications", TRUE) != 0;
 	gSoundEnabled = LoadSetting(L"Sound", TRUE) != 0;
