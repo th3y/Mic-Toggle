@@ -23,13 +23,26 @@ constexpr wchar_t kSettingsKey[] = L"Software\\MicToggle";
 constexpr wchar_t kSoundOn[] = L"C:\\Windows\\Media\\Speech On.wav";
 constexpr wchar_t kSoundOff[] = L"C:\\Windows\\Media\\Speech Off.wav";
 constexpr WORD kDefaultHotkey = MAKEWORD('M', HOTKEYF_CONTROL | HOTKEYF_ALT);
+constexpr UINT kMutedVolumePresets[] = {0, 5, 10, 20};
+constexpr UINT kEnabledVolumePresets[] = {50, 75, 90, 95, 100};
+constexpr int kMutedVolumeCount = ARRAYSIZE(kMutedVolumePresets);
+constexpr int kEnabledVolumeCount = ARRAYSIZE(kEnabledVolumePresets);
 
 constexpr UINT WM_TRAY = WM_APP + 1;
 constexpr UINT WM_MUTE_CHANGED = WM_APP + 2;
 constexpr UINT kTrayId = 1;
 constexpr int kHotkeyId = 1;
 
-enum MenuCommand { CmdToggle = 100, CmdChangeHotkey, CmdNotifications, CmdSound, CmdAutostart, CmdExit };
+enum MenuCommand {
+	CmdToggle = 100,
+	CmdChangeHotkey,
+	CmdNotifications,
+	CmdSound,
+	CmdAutostart,
+	CmdExit,
+	CmdMutedVolume = 300,
+	CmdEnabledVolume = 400,
+};
 enum DialogControl { IdHotkeyInput = 200 };
 
 struct Icons {
@@ -47,6 +60,8 @@ ComPtr<IAudioEndpointVolume> gWatchedVolume;
 bool gMuted;
 bool gNotificationsEnabled;
 bool gSoundEnabled;
+UINT gMutedVolumePercent;
+UINT gEnabledVolumePercent;
 WORD gHotkey;
 wchar_t gHotkeyLabel[64];
 
@@ -186,6 +201,17 @@ void SetAllMicsMuted(bool muted) {
 	}
 }
 
+void ApplyVolumeToAllMics(UINT percent) {
+	float level = std::clamp(percent, 0u, 100u) / 100.0f;
+	for (auto& mic : GetActiveMics()) {
+		if (auto volume = GetVolume(mic.Get())) volume->SetMasterVolumeLevelScalar(level, nullptr);
+	}
+}
+
+void ApplyVolumeForState(bool muted) {
+	ApplyVolumeToAllMics(muted ? gMutedVolumePercent : gEnabledVolumePercent);
+}
+
 std::wstring GetProcessName(DWORD processId) {
 	std::wstring fallback = L"Unknown app (PID " + std::to_wstring(processId) + L")";
 
@@ -297,6 +323,7 @@ void SaveSetting(const wchar_t* name, DWORD value) {
 void ToggleMic() {
 	gMuted = !IsDefaultMicMuted();
 	SetAllMicsMuted(gMuted);
+	ApplyVolumeForState(gMuted);
 	SaveSetting(L"Muted", gMuted);
 	UpdateTrayIcon(NIM_MODIFY);
 	if (gSoundEnabled) PlayStateSound();
@@ -439,7 +466,7 @@ void ShowHotkeyDialog() {
 	int x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
 	int y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
 
-	gHotkeyDialog = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, kDialogClass, L"Cambiar atajo",
+	gHotkeyDialog = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, kDialogClass, L"New shortcut",
 									style, x, y, width, height, nullptr, nullptr, gInstance, nullptr);
 
 	AddControl(gHotkeyDialog, L"STATIC", L"Set a new shortcut:", 0, 16, 14, 268, 20, 0);
@@ -452,6 +479,28 @@ void ShowHotkeyDialog() {
 	ShowWindow(gHotkeyDialog, SW_SHOW);
 	SetForegroundWindow(gHotkeyDialog);
 	SetFocus(input);
+}
+
+void AddVolumeOptions(HMENU parent, const wchar_t* title, UINT current, const UINT* presets, int count, int baseId) {
+	HMENU submenu = CreatePopupMenu();
+	for (int i = 0; i < count; ++i) {
+		wchar_t label[8];
+		wsprintfW(label, L"%u%%", presets[i]);
+		AppendMenuW(submenu, MF_STRING | (presets[i] == current ? MF_CHECKED : 0), baseId + i, label);
+	}
+	AppendMenuW(parent, MF_POPUP, reinterpret_cast<UINT_PTR>(submenu), title);
+}
+
+void SetMutedVolume(UINT percent) {
+	gMutedVolumePercent = percent;
+	SaveSetting(L"MuteVolume", percent);
+	if (gMuted) ApplyVolumeForState(true);
+}
+
+void SetEnabledVolume(UINT percent) {
+	gEnabledVolumePercent = percent;
+	SaveSetting(L"UnmuteVolume", percent);
+	if (!gMuted) ApplyVolumeForState(false);
 }
 
 void ShowTrayMenu() {
@@ -469,6 +518,11 @@ void ShowTrayMenu() {
 
 	AppendMenuW(menu, MF_STRING, CmdToggle, toggleLabel);
 	AppendMenuW(menu, MF_STRING, CmdChangeHotkey, L"Change Shortcut...");
+
+	HMENU volumeMenu = CreatePopupMenu();
+	AddVolumeOptions(volumeMenu, L"Muted Volume", gMutedVolumePercent, kMutedVolumePresets, kMutedVolumeCount, CmdMutedVolume);
+	AddVolumeOptions(volumeMenu, L"Enabled Volume", gEnabledVolumePercent, kEnabledVolumePresets, kEnabledVolumeCount, CmdEnabledVolume);
+	AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(volumeMenu), L"Mic Volume");
 	AppendMenuW(menu, MF_STRING | (gNotificationsEnabled ? MF_CHECKED : 0), CmdNotifications, L"Show Notifications");
 	AppendMenuW(menu, MF_STRING | (gSoundEnabled ? MF_CHECKED : 0), CmdSound, L"Play Sound");
 	AppendMenuW(menu, MF_STRING | (IsAutostartEnabled() ? MF_CHECKED : 0), CmdAutostart, L"Start with Windows");
@@ -502,6 +556,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 	case WM_MUTE_CHANGED:
 		if (gMuted != (wParam != 0)) {
 			gMuted = wParam != 0;
+			ApplyVolumeForState(gMuted);
 			SaveSetting(L"Muted", gMuted);
 			UpdateTrayIcon(NIM_MODIFY);
 		}
@@ -515,6 +570,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 		case CmdSound: SetSoundEnabled(!gSoundEnabled); break;
 		case CmdAutostart: SetAutostart(!IsAutostartEnabled()); break;
 		case CmdExit: DestroyWindow(window); break;
+		default:
+			if (LOWORD(wParam) >= CmdMutedVolume && LOWORD(wParam) < CmdMutedVolume + kMutedVolumeCount)
+				SetMutedVolume(kMutedVolumePresets[LOWORD(wParam) - CmdMutedVolume]);
+			else if (LOWORD(wParam) >= CmdEnabledVolume && LOWORD(wParam) < CmdEnabledVolume + kEnabledVolumeCount)
+				SetEnabledVolume(kEnabledVolumePresets[LOWORD(wParam) - CmdEnabledVolume]);
+			break;
 		}
 		return 0;
 
@@ -562,7 +623,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 	gWindow = CreateWindowW(kAppName, kAppName, 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, nullptr);
 	gTaskbarCreatedMsg = RegisterWindowMessageW(L"TaskbarCreated");
 	gMuted = LoadSetting(L"Muted", IsDefaultMicMuted()) != 0;
+	gMutedVolumePercent = std::min<UINT>(LoadSetting(L"MuteVolume", 0), 100);
+	gEnabledVolumePercent = std::min<UINT>(LoadSetting(L"UnmuteVolume", 95), 100);
 	SetAllMicsMuted(gMuted);
+	ApplyVolumeForState(gMuted);
 	UseHotkey(LoadHotkey());
 	gNotificationsEnabled = LoadSetting(L"Notifications", TRUE) != 0;
 	gSoundEnabled = LoadSetting(L"Sound", TRUE) != 0;
